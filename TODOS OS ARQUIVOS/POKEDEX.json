@@ -1,0 +1,514 @@
+{
+  "name": "POKEDEX",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "=https://pokeapi.co/api/v2/pokemon/{{$json[\"game_index\"]}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -896,
+        -80
+      ],
+      "id": "6c75a225-5b8a-483d-92e2-af9273510c88",
+      "name": "HTTP TIPO"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -720,
+        0
+      ],
+      "id": "0676596e-8109-43a6-a72c-6baac45e7cba",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "url": "=https://pokeapi.co/api/v2/pokemon-species/{{$json[\"game_index\"]}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -896,
+        64
+      ],
+      "id": "fd73d517-ca7a-4855-bd7e-fdb3a4eb2609",
+      "name": "HTTP  PRE-EVO"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json['url_evolução'] }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -368,
+        -16
+      ],
+      "id": "ab977200-7a67-479d-8f9b-89ae6889a475",
+      "name": "HTTP  EVOLU"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Funções auxiliares --- //\n\n// Corrige nomes: troca \"-\" e \"_\" por espaço e deixa cada palavra com inicial maiúscula\n// troca hífen e underline por espaço\n// divide em palavras\n// capitaliza cada palavra\n// junta de volta\nfunction formatarNome(str) {\n  if (!str || typeof str !== \"string\") return str;\n  return str\n    .replace(/[-_]/g, \" \")\n    .split(\" \")\n    .map(s => s.charAt(0).toUpperCase() + s.slice(1))\n    .join(\" \");\n}\n\n// --- Coleta os dados --- //\n\n// pega os dados já existentes da planilha (inclui também colunas manuais que o usuário adicionou)\nconst existing = $('COLETA ID').all().map(row => row.json);\n\n// pega os dados novos vindos do nó anterior\nconst novos = $input.all().map(item => item.json);\n\n// --- Junta e organiza --- //\n\n// junta os registros existentes com os novos\nlet todos = [...existing, ...novos];\n\n// remove registros inválidos (sem game_index ou nome)\ntodos = todos.filter(item => item.game_index && item.nome);\n\n// remove duplicados por game_index (mantém sempre o último inserido)\nconst seen = new Map();\ntodos.forEach(item => seen.set(item.game_index, item));\ntodos = Array.from(seen.values());\n\n// ordena todos pelo game_index em ordem crescente\ntodos = todos.sort((a, b) => (a.game_index || 0) - (b.game_index || 0));\n\n// --- Formatação final --- //\n\n// percorre todos os registros e aplica a formatação de nomes\n// mantém também as colunas manuais já existentes na planilha\nreturn todos.map(item => {\n  return {\n    json: {\n      ...item,\n      game_index: item.game_index,\n      nome: formatarNome(item.nome),\n      tipo: formatarNome(item.tipo),\n      \"pré_evolução\": formatarNome(item[\"pré_evolução\"]),\n      \"evolução\": formatarNome(item[\"evolução\"]),\n      \"evolução_final\": formatarNome(item[\"evolução_final\"]),\n      \"url_evolução\": item[\"url_evolução\"]\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        -32
+      ],
+      "id": "fdc77cd0-4205-413d-874f-032ec025803d",
+      "name": "ORGANIZADOR"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $('FILTRO DE DADOS').all().map((codeItem, index) => {\n  const codeData = codeItem.json;\n  const chain = $input.all()[index]?.json?.chain || {};\n  const nome = codeData.nome;\n\n  // ==================================================\n  // Função recursiva para percorrer a cadeia\n  // ==================================================\n  function findEvolutionData(node, parent = null) {\n    if (!node) return null;\n\n    // Se o Pokémon atual for encontrado neste nó\n    if (node.species?.name === nome) {\n      // Busca evolução final percorrendo até o último nó\n      let current = node.evolves_to?.[0];\n      while (current?.evolves_to?.length) {\n        current = current.evolves_to[0];\n      }\n\n      return {\n        pre: parent ? parent.species?.name : \"Sem pré-evolução\",\n        evo: node.evolves_to?.[0]?.species?.name || \"Sem evolução\",\n        final: current ? current.species?.name : \"Sem evolução final\"\n      };\n    }\n\n    // Se não for este nó, percorre os filhos\n    for (const child of node.evolves_to || []) {\n      const result = findEvolutionData(child, node);\n      if (result) return result;\n    }\n\n    return null;\n  }\n\n  // Executa a busca a partir da raiz da cadeia\n  const evoData = findEvolutionData(chain) || {\n    pre: \"Sem pré-evolução\",\n    evo: \"Sem evolução\",\n    final: \"Sem evolução final\"\n  };\n\n  // ===============================\n  // Correções finais\n  // ===============================\n\n  // Evita duplicação no campo pré-evolução\n  let preEvolucao = evoData.pre === nome ? \"Sem pré-evolução\" : evoData.pre;\n\n  // Evita duplicação no campo evolução\n  let evolucao = evoData.evo === nome ? \"Sem evolução\" : evoData.evo;\n\n  // Aplica a regra para evolução final (não pode repetir o próprio nome)\n  let evolucaoFinal = (evoData.final && evoData.final !== nome) \n    ? evoData.final \n    : \"Sem evolução final\";\n\n  return {\n    json: {\n      game_index: codeData.game_index,\n      nome,\n      tipo: codeData.tipo || \"Desconhecido\",\n      \"pré_evolução\": preEvolucao,\n      \"evolução\": evolucao,\n      \"evolução_final\": evolucaoFinal,\n      \"url_evolução\": codeData.url_evolução\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        -32
+      ],
+      "id": "e7c5592d-0b67-4d50-8a58-2b79a4847782",
+      "name": "FILTRO FINAL"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1Ew6AGDgY4PMfrQQwXdQGFk_zz_MDPA2x8DLEbrjmUAA",
+          "mode": "list",
+          "cachedResultName": "pre-poke",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Ew6AGDgY4PMfrQQwXdQGFk_zz_MDPA2x8DLEbrjmUAA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Página1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Ew6AGDgY4PMfrQQwXdQGFk_zz_MDPA2x8DLEbrjmUAA/edit#gid=0"
+        },
+        "options": {
+          "outputFormatting": {
+            "values": {
+              "general": "UNFORMATTED_VALUE",
+              "date": "FORMATTED_STRING"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1216,
+        -16
+      ],
+      "id": "863ff601-2bf9-4d10-b2e9-86a865e10620",
+      "name": "COLETA ID",
+      "alwaysOutputData": false,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "Nfc4pO1D1vWezU66",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "//------- Game index---- //\n//filtrei somente o game index, pq o dado da culuna até então nao se mostrou util//\nreturn items.map(item => {\n  return {\n    json: {\n      game_index: item.json[\"Game index\"], \n    }\n  }\n})\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1056,
+        -16
+      ],
+      "id": "09befb54-a60e-4c7e-a1e6-c33bf79a0089",
+      "name": "FILTRO DE ID"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1168,
+        -272
+      ],
+      "id": "6c319a2d-d740-40a3-80b2-7e95b498361d",
+      "name": "EXECUTAR"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "144typcGqSwmOFsJhB_8BN38iuj8Mkg33t4aHl_hWQRM",
+          "mode": "list",
+          "cachedResultName": "pokedez",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/144typcGqSwmOFsJhB_8BN38iuj8Mkg33t4aHl_hWQRM/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Página1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/144typcGqSwmOFsJhB_8BN38iuj8Mkg33t4aHl_hWQRM/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Game Index": "={{ $json.game_index }}",
+            "Nome": "={{ $json.nome }}",
+            "Tipo": "={{ $json.tipo }}",
+            "Evoluçao Final": "={{ $json['evolução_final'] }}",
+            "Evolução": "={{ $json['evolução'] }}",
+            "Pré-Evolução": "={{ $json['pré_evolução'] }}"
+          },
+          "matchingColumns": [
+            "Game Index"
+          ],
+          "schema": [
+            {
+              "id": "Game Index",
+              "displayName": "Game Index",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Nome",
+              "displayName": "Nome",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Tipo",
+              "displayName": "Tipo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Evolução",
+              "displayName": "Evolução",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Pré-Evolução",
+              "displayName": "Pré-Evolução",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Evoluçao Final",
+              "displayName": "Evoluçao Final",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        496,
+        -32
+      ],
+      "id": "a9206edb-685d-460d-8a8e-8556d06eb03d",
+      "name": "DEPOSITO DOS DADOS",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "Nfc4pO1D1vWezU66",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item, index) => {\n  const data = item.json;\n\n  // pega o valor do Code correspondente ao mesmo index\n  const gameIndex = $('FILTRO DE ID').all()[index]?.json.game_index || null;\n\n  const nome = data.forms?.[0]?.name || \"desconhecido\";\n  const tipo = data.types?.[0]?.type?.name || \"desconhecido\";\n  const preEvolucao = data.evolves_from_species?.name || \"Sem pré-evolução\";\n  const chainUrl = data.evolution_chain?.url || null;\n\n  return {\n    json: {\n      game_index: gameIndex,\n      nome,\n      tipo,\n      \"pré_evolução\": preEvolucao,\n      \"url_evolução\": chainUrl\n    }\n  };\n});\n\n\n$('FILTRO DE ID').first().json.game_index\n\n$('FILTRO DE ID').first().json.game_index"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        0
+      ],
+      "id": "89989a0c-87e6-4117-9c16-d06bea15e63d",
+      "name": "FILTRO DE DADOS"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f1f45729-e2fc-4482-83d8-cb1a5fdde2a2",
+              "leftValue": "={{$json[\"chain\"][\"species\"][\"name\"]}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -160,
+        -16
+      ],
+      "id": "99f61f45-82f3-4cfe-a1ed-f828e9dd3f9a",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "content": "Início e Coleta\n\nEu inicio o fluxo manualmente e leio os IDs da planilha. Esses IDs são a base para buscar os dados de cada Pokémon.",
+        "height": 656,
+        "width": 336
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1280,
+        -400
+      ],
+      "typeVersion": 1,
+      "id": "d5cb4c98-11bc-449d-8838-64cb1843adf0",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "Consultas na API\n\nFaço requisições na PokeAPI para pegar tipo, pré-evolução e a cadeia de evolução.",
+        "height": 432,
+        "width": 720
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -928,
+        -176
+      ],
+      "typeVersion": 1,
+      "id": "a4dd742b-286d-4a62-9ae2-a41253728f90",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "Organização e Depósito\n\nNormalizo nomes (iniciais maiúsculas ordem das linhas), ordeno pelo Game Index e gravo na planilha sem apagar colunas manuais.",
+        "height": 432,
+        "width": 656
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        64,
+        -192
+      ],
+      "typeVersion": 1,
+      "id": "38edd47f-778e-4439-acdc-4341e21aad5d",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "Validação\n\nUso um If para validar se os dados da API estão corretos. Se vier algo inesperado, consigo detectar rápido.",
+        "height": 432
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -192,
+        -176
+      ],
+      "typeVersion": 1,
+      "id": "f1ede8e4-f967-435b-b80b-c8458d1e4242",
+      "name": "Sticky Note3"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "HTTP TIPO": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "FILTRO DE DADOS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP  PRE-EVO": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "HTTP  EVOLU": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ORGANIZADOR": {
+      "main": [
+        [
+          {
+            "node": "DEPOSITO DOS DADOS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FILTRO FINAL": {
+      "main": [
+        [
+          {
+            "node": "ORGANIZADOR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "COLETA ID": {
+      "main": [
+        [
+          {
+            "node": "FILTRO DE ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FILTRO DE ID": {
+      "main": [
+        [
+          {
+            "node": "HTTP TIPO",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP  PRE-EVO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EXECUTAR": {
+      "main": [
+        [
+          {
+            "node": "COLETA ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DEPOSITO DOS DADOS": {
+      "main": [
+        []
+      ]
+    },
+    "FILTRO DE DADOS": {
+      "main": [
+        [
+          {
+            "node": "HTTP  EVOLU",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "FILTRO FINAL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "bac91b75-f493-4967-8f39-a239e3053378",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "190bbb0c16b21d5669508cb1bf50fa9ace3c5be34ceec738b53ab610e89f57ad"
+  },
+  "id": "Rmn1gGxrAYRxvNeq",
+  "tags": []
+}
